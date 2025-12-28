@@ -6,7 +6,6 @@ readme = "readme.md"
 requires-python = ">=3.12"
 dependencies = [
   "markdown-it-py",
-  "pytest",
   "sulguk",
   "typer",
 ]
@@ -23,3 +22,8 @@ packages = ["src/codex_telegram_bridge"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/codex_telegram_bridge", "readme.md"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
