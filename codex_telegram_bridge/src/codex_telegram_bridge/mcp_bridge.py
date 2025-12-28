@@ -13,6 +13,8 @@ import time
 from queue import Queue, Empty
 from typing import Any, Dict, List, Optional, Tuple
 
+import typer
+
 from .bridge_common import (
     TelegramClient,
     RouteStore,
@@ -253,7 +255,7 @@ class MCPStdioClient:
             pass
 
 
-def main() -> None:
+def run() -> None:
     config = load_telegram_config()
     token = config_get(config, "bot_token") or ""
     db_path = config_get(config, "bridge_db") or "./bridge_routes.sqlite3"
@@ -367,6 +369,10 @@ def main() -> None:
                     conversation_id = route.route_id
 
             work_q.put((chat_id, user_msg_id, prompt, conversation_id))
+
+
+def main() -> None:
+    typer.run(run)
 
 
 if __name__ == "__main__":

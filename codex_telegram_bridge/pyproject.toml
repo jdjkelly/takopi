@@ -8,6 +8,7 @@ dependencies = [
   "markdown-it-py",
   "sulguk",
   "tomli; python_version < '3.11'",
+  "typer",
 ]
 
 [project.scripts]

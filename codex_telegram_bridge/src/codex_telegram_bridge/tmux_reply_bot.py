@@ -9,6 +9,8 @@ import subprocess
 import time
 from typing import Optional
 
+import typer
+
 from .bridge_common import (
     TelegramClient,
     RouteStore,
@@ -30,7 +32,7 @@ def tmux_send_text(target: str, text: str, press_enter: bool = True) -> None:
         subprocess.check_call(["tmux", "send-keys", "-t", target, "Enter"])
 
 
-def main() -> None:
+def run() -> None:
     config = load_telegram_config()
     token = config_get(config, "bot_token") or ""
     db_path = config_get(config, "bridge_db") or "./bridge_routes.sqlite3"
@@ -98,6 +100,10 @@ def main() -> None:
                     text=f"❌ Failed to send to tmux ({tmux_target}): {e}",
                     reply_to_message_id=user_msg_id,
                 )
+
+
+def main() -> None:
+    typer.run(run)
 
 
 if __name__ == "__main__":

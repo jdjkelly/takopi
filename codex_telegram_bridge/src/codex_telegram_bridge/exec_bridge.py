@@ -14,6 +14,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional, Tuple
 
+import typer
+
 from .bridge_common import (
     TelegramClient,
     RouteStore,
@@ -260,7 +262,24 @@ class CodexExecRunner:
 # -------------------- Telegram loop --------------------
 
 
-def main() -> None:
+def run(
+    progress_edit_every_s: float = typer.Option(
+        2.5,
+        "--progress-edit-every",
+        help="Minimum seconds between progress message edits.",
+        min=0.1,
+    ),
+    progress_silent: bool = typer.Option(
+        True,
+        "--progress-silent/--no-progress-silent",
+        help="Send the progress message without sound/vibration.",
+    ),
+    final_notify: bool = typer.Option(
+        True,
+        "--final-notify/--no-final-notify",
+        help="Send the final response as a new message (not an edit).",
+    ),
+) -> None:
     config = load_telegram_config()
     token = config_get(config, "bot_token") or ""
     db_path = config_get(config, "bridge_db") or "./bridge_routes.sqlite3"
@@ -326,12 +345,9 @@ def main() -> None:
             "[handle] start "
             f"chat_id={chat_id} user_msg_id={user_msg_id} resume_session={resume_session!r}"
         )
-        try:
-            edit_every_s = float(os.environ.get("TG_PROGRESS_EDIT_EVERY_S", "2.5"))
-        except ValueError:
-            edit_every_s = 2.5
-        silent_progress = os.environ.get("TG_PROGRESS_SILENT", "1") == "1"
-        loud_final = os.environ.get("TG_FINAL_NOTIFY", "1") == "1"
+        edit_every_s = progress_edit_every_s
+        silent_progress = progress_silent
+        loud_final = final_notify
 
         typing_stop = threading.Event()
         typing_thread = threading.Thread(
@@ -525,6 +541,10 @@ def main() -> None:
                     )
 
             pool.submit(handle, chat_id, user_msg_id, text, resume_session)
+
+
+def main() -> None:
+    typer.run(run)
 
 
 if __name__ == "__main__":
