@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from textwrap import indent
 from typing import Any, Optional
 
-ELLIPSIS = "…"
 STATUS_RUNNING = "▸"
 STATUS_DONE = "✓"
 HEADER_SEP = " · "
@@ -75,7 +74,7 @@ def format_tool_call(server: str, tool: str) -> str:
     return name or "tool"
 
 def is_command_log_line(line: str) -> bool:
-    return f"{STATUS_DONE} ran:" in line
+    return f"{STATUS_RUNNING} running:" in line or f"{STATUS_DONE} ran:" in line
 
 
 def extract_numeric_id(item_id: Optional[object], fallback: Optional[int] = None) -> Optional[int]:
@@ -199,7 +198,12 @@ class ExecProgressRenderer:
                     case _:
                         action_line = format_item_action_line(etype, item)
                         if action_line is not None:
-                            self.state.recent_actions.append(attach_id(item_id, action_line))
+                            full = attach_id(item_id, action_line)
+                            if etype == "item.completed" and self.state.recent_actions:
+                                last = self.state.recent_actions[-1]
+                                if last.startswith(f"[{item_id}] {STATUS_RUNNING} "):
+                                    self.state.recent_actions.pop()
+                            self.state.recent_actions.append(full)
                             return True
                         if etype == "item.completed":
                             completed_line = format_item_completed_line(item)
