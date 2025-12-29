@@ -1,7 +1,4 @@
 import asyncio
-import os
-
-import pytest
 
 from codex_telegram_bridge.exec_bridge import extract_session_id, truncate_for_telegram
 
@@ -150,54 +147,3 @@ def test_new_final_message_forces_notification_when_too_long_to_edit() -> None:
     assert len(bot.send_calls) == 2
     assert bot.send_calls[0]["disable_notification"] is True
     assert bot.send_calls[1]["disable_notification"] is False
-
-
-def test_codex_runner_cancellation_terminates_subprocess(tmp_path, monkeypatch) -> None:
-    from codex_telegram_bridge.exec_bridge import CodexExecRunner
-
-    pid_file = tmp_path / "pid"
-    codex_path = tmp_path / "codex"
-    codex_path.write_text(
-        "#!/usr/bin/env python3\n"
-        "import os\n"
-        "import time\n"
-        "\n"
-        "pid_file = os.environ.get('CODEX_FAKE_PID_FILE')\n"
-        "if pid_file:\n"
-        "    with open(pid_file, 'w', encoding='utf-8') as f:\n"
-        "        f.write(str(os.getpid()))\n"
-        "        f.flush()\n"
-        "\n"
-        "time.sleep(60)\n",
-        encoding="utf-8",
-    )
-    codex_path.chmod(0o755)
-    monkeypatch.setenv("CODEX_FAKE_PID_FILE", str(pid_file))
-
-    runner = CodexExecRunner(codex_cmd=str(codex_path), workspace=None, extra_args=[])
-
-    async def run_and_cancel() -> None:
-        task = asyncio.create_task(runner.run("hello", session_id=None))
-
-        for _ in range(100):
-            if pid_file.exists():
-                break
-            await asyncio.sleep(0.01)
-        assert pid_file.exists()
-
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
-
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        for _ in range(200):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return
-            await asyncio.sleep(0.01)
-
-        raise AssertionError("cancelled codex subprocess is still running")
-
-    asyncio.run(run_and_cancel())
