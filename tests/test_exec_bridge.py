@@ -186,12 +186,30 @@ class _FakeRunner:
 class _FakeClock:
     def __init__(self, start: float = 0.0) -> None:
         self._now = start
+        self._sleep_until: float | None = None
+        self._sleep_event: asyncio.Event | None = None
+        self.sleep_calls = 0
 
     def __call__(self) -> float:
         return self._now
 
     def set(self, value: float) -> None:
         self._now = value
+        if self._sleep_until is None or self._sleep_event is None:
+            return
+        if self._sleep_until <= self._now:
+            self._sleep_event.set()
+            self._sleep_until = None
+            self._sleep_event = None
+
+    async def sleep(self, delay: float) -> None:
+        self.sleep_calls += 1
+        if delay <= 0:
+            await asyncio.sleep(0)
+            return
+        self._sleep_until = self._now + delay
+        self._sleep_event = asyncio.Event()
+        await self._sleep_event.wait()
 
 
 class _FakeRunnerWithEvents:
@@ -203,12 +221,16 @@ class _FakeRunnerWithEvents:
         clock: _FakeClock,
         answer: str = "ok",
         session_id: str = "019b66fc-64c2-7a71-81cd-081c504cfeb2",
+        advance_after: float | None = None,
+        hold: asyncio.Event | None = None,
     ) -> None:
         self._events = events
         self._times = times
         self._clock = clock
         self._answer = answer
         self._session_id = session_id
+        self._advance_after = advance_after
+        self._hold = hold
 
     async def run_serialized(self, *_args, **kwargs) -> tuple[str, str, bool]:
         on_event = kwargs.get("on_event")
@@ -217,11 +239,16 @@ class _FakeRunnerWithEvents:
                 self._clock.set(when)
                 await on_event(event)
                 await asyncio.sleep(0)
+            if self._advance_after is not None:
+                self._clock.set(self._advance_after)
+                await asyncio.sleep(0)
+        if self._hold is not None:
+            await self._hold.wait()
         return (self._session_id, self._answer, True)
 
 
 def test_final_notify_sends_loud_final_message() -> None:
-    from takopi.exec_bridge import BridgeConfig, _handle_message
+    from takopi.exec_bridge import BridgeConfig, handle_message
 
     bot = _FakeBot()
     runner = _FakeRunner(answer="ok")
@@ -235,7 +262,7 @@ def test_final_notify_sends_loud_final_message() -> None:
     )
 
     asyncio.run(
-        _handle_message(
+        handle_message(
             cfg,
             chat_id=123,
             user_msg_id=10,
@@ -250,7 +277,7 @@ def test_final_notify_sends_loud_final_message() -> None:
 
 
 def test_new_final_message_forces_notification_when_too_long_to_edit() -> None:
-    from takopi.exec_bridge import BridgeConfig, _handle_message
+    from takopi.exec_bridge import BridgeConfig, handle_message
 
     bot = _FakeBot()
     runner = _FakeRunner(answer="x" * 10_000)
@@ -264,7 +291,7 @@ def test_new_final_message_forces_notification_when_too_long_to_edit() -> None:
     )
 
     asyncio.run(
-        _handle_message(
+        handle_message(
             cfg,
             chat_id=123,
             user_msg_id=10,
@@ -279,7 +306,7 @@ def test_new_final_message_forces_notification_when_too_long_to_edit() -> None:
 
 
 def test_progress_edits_are_rate_limited() -> None:
-    from takopi.exec_bridge import BridgeConfig, _handle_message
+    from takopi.exec_bridge import BridgeConfig, handle_message
 
     bot = _FakeBot()
     clock = _FakeClock()
@@ -294,13 +321,61 @@ def test_progress_edits_are_rate_limited() -> None:
             },
         },
         {
-            "type": "item.completed",
+            "type": "item.started",
+            "item": {
+                "id": "item_1",
+                "type": "command_execution",
+                "command": "echo 2",
+                "status": "in_progress",
+            },
+        },
+    ]
+    runner = _FakeRunnerWithEvents(
+        events=events,
+        times=[0.2, 0.4],
+        clock=clock,
+        advance_after=1.0,
+    )
+    cfg = BridgeConfig(
+        bot=bot,  # type: ignore[arg-type]
+        runner=runner,  # type: ignore[arg-type]
+        chat_id=123,
+        final_notify=True,
+        startup_msg="",
+        max_concurrency=1,
+    )
+
+    asyncio.run(
+        handle_message(
+            cfg,
+            chat_id=123,
+            user_msg_id=10,
+            text="hi",
+            resume_session=None,
+            clock=clock,
+            sleep=clock.sleep,
+            progress_edit_every=1.0,
+        )
+    )
+
+    assert len(bot.edit_calls) == 1
+    assert "echo 2" in bot.edit_calls[0]["text"]
+
+
+def test_progress_edits_do_not_sleep_again_without_new_events() -> None:
+    from takopi.exec_bridge import BridgeConfig, handle_message
+
+    bot = _FakeBot()
+    clock = _FakeClock()
+    hold = asyncio.Event()
+    events = [
+        {
+            "type": "item.started",
             "item": {
                 "id": "item_0",
                 "type": "command_execution",
                 "command": "echo 1",
-                "exit_code": 0,
-                "status": "completed",
+                "status": "in_progress",
             },
         },
         {
@@ -315,8 +390,10 @@ def test_progress_edits_are_rate_limited() -> None:
     ]
     runner = _FakeRunnerWithEvents(
         events=events,
-        times=[0.2, 0.4, 1.2],
+        times=[0.2, 0.4],
         clock=clock,
+        advance_after=None,
+        hold=hold,
     )
     cfg = BridgeConfig(
         bot=bot,  # type: ignore[arg-type]
@@ -327,23 +404,50 @@ def test_progress_edits_are_rate_limited() -> None:
         max_concurrency=1,
     )
 
-    asyncio.run(
-        _handle_message(
-            cfg,
-            chat_id=123,
-            user_msg_id=10,
-            text="hi",
-            resume_session=None,
-            clock=clock,
-            progress_edit_every=1.0,
+    async def run_test() -> None:
+        task = asyncio.create_task(
+            handle_message(
+                cfg,
+                chat_id=123,
+                user_msg_id=10,
+                text="hi",
+                resume_session=None,
+                clock=clock,
+                sleep=clock.sleep,
+                progress_edit_every=1.0,
+            )
         )
-    )
 
-    assert len(bot.edit_calls) == 1
+        for _ in range(100):
+            if clock._sleep_until is not None:
+                break
+            await asyncio.sleep(0)
+
+        assert clock._sleep_until == pytest.approx(1.0)
+
+        clock.set(1.0)
+
+        for _ in range(100):
+            if bot.edit_calls:
+                break
+            await asyncio.sleep(0)
+
+        assert len(bot.edit_calls) == 1
+
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert clock.sleep_calls == 1
+        assert clock._sleep_until is None
+
+        hold.set()
+        await task
+
+    asyncio.run(run_test())
 
 
 def test_bridge_flow_sends_progress_edits_and_final_resume() -> None:
-    from takopi.exec_bridge import BridgeConfig, _handle_message
+    from takopi.exec_bridge import BridgeConfig, handle_message
 
     bot = _FakeBot()
     clock = _FakeClock()
@@ -386,13 +490,14 @@ def test_bridge_flow_sends_progress_edits_and_final_resume() -> None:
     )
 
     asyncio.run(
-        _handle_message(
+        handle_message(
             cfg,
             chat_id=123,
             user_msg_id=42,
             text="do it",
             resume_session=None,
             clock=clock,
+            sleep=clock.sleep,
             progress_edit_every=1.0,
         )
     )
@@ -529,7 +634,7 @@ class _FakeRunnerCancellable:
 
 
 def test_handle_message_cancelled_renders_cancelled_state() -> None:
-    from takopi.exec_bridge import BridgeConfig, _handle_message
+    from takopi.exec_bridge import BridgeConfig, handle_message
 
     bot = _FakeBot()
     session_id = "019b66fc-64c2-7a71-81cd-081c504cfeb2"
@@ -546,7 +651,7 @@ def test_handle_message_cancelled_renders_cancelled_state() -> None:
 
     async def run_test():
         task = asyncio.create_task(
-            _handle_message(
+            handle_message(
                 cfg,
                 chat_id=123,
                 user_msg_id=10,
