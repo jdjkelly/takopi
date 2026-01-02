@@ -26,6 +26,8 @@ class RedactTokenFilter(logging.Filter):
 def setup_logging(*, debug: bool = False) -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    logging.getLogger("markdown_it").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
         handler.close()
