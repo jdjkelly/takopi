@@ -69,7 +69,7 @@ From the bridge/runner point of view:
 
 1. **Bridge receives Telegram prompt**
 2. Bridge tries to extract a resume line (`codex resume <uuid>`) from the message/reply (runner-owned parsing). 
-3. Bridge calls `runner.run(prompt, resumeTokenOrNone, on_event=...)`
+3. Bridge calls `runner.run(prompt, resumeTokenOrNone)`
 4. Codex runner spawns `codex exec --json ...` and reads JSONL line-by-line. 
 5. The *first moment the runner can know thread identity* is:
 
@@ -350,7 +350,7 @@ did_emit_started = False
 did_emit_completed = False
 turn_index = 0
 
-def emit(evt): on_event(evt)
+def emit(evt): yield evt  # emit to the output event stream
 
 for line in codex_jsonl_stream:
     t = line["type"]

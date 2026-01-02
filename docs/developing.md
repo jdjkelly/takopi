@@ -90,7 +90,7 @@ The orchestrator module containing:
 - Per-resume locks (WeakValueDictionary) prevent concurrent resumes of the same session
 - Event delivery uses a single internal queue to preserve order without per-event tasks
 - Stderr is drained into a bounded tail (debug logging only)
-- Event callbacks must not raise; callback errors abort the run
+- Translation errors abort the run; keep event normalization defensive
 
 ### `model.py` / `runner.py` - Core domain types
 
