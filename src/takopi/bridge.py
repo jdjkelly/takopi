@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -659,6 +661,52 @@ async def handle_message(
     )
 
 
+SOCKET_PATH = Path.home() / ".takopi" / "takopi.sock"
+
+
+async def socket_listener(
+    cfg: BridgeConfig,
+    send_stream: anyio.abc.ObjectSendStream[dict[str, Any]],
+) -> None:
+    """Listen for prompts on Unix socket and queue them for processing.
+
+    The --chrome flag loads the claude-in-chrome MCP server. When running from
+    a launchd/background service, Chrome Native Messaging won't work due to
+    macOS security context requirements. Socket triggers allow local terminal
+    processes to inject prompts into a takopi instance running in foreground.
+    """
+    socket_path = SOCKET_PATH
+    try:
+        socket_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    listener = await anyio.create_unix_listener(socket_path)
+    logger.info("[socket] listening on %s", socket_path)
+
+    async def handle_connection(conn: anyio.abc.SocketStream) -> None:
+        try:
+            async with conn:
+                data = await conn.receive(4096)
+                req = json.loads(data.decode())
+                # Build message in same format as Telegram
+                msg = {
+                    "text": req.get("prompt", ""),
+                    "message_id": int(time.time() * 1000),
+                    "chat": {"id": cfg.chat_id},
+                }
+                if engine := req.get("engine"):
+                    msg["text"] = f"/{engine} {msg['text']}"
+                await send_stream.send(msg)
+                await conn.send(b'{"ok": true}\n')
+                logger.info("[socket] queued prompt: %s", msg["text"][:50])
+        except Exception:
+            logger.exception("[socket] error handling connection")
+
+    await listener.serve(handle_connection)
+
+
 async def poll_updates(cfg: BridgeConfig) -> AsyncIterator[dict[str, Any]]:
     offset: int | None = None
     offset = await _drain_backlog(cfg, offset)
@@ -795,12 +843,31 @@ async def _send_runner_unavailable(
 async def run_main_loop(
     cfg: BridgeConfig,
     poller: Callable[[BridgeConfig], AsyncIterator[dict[str, Any]]] = poll_updates,
+    *,
+    enable_socket: bool = True,
 ) -> None:
     running_tasks: dict[int, RunningTask] = {}
 
     try:
         await _set_command_menu(cfg)
+
+        # Create message queue for merging Telegram and socket sources
+        send_stream, recv_stream = anyio.create_memory_object_stream[dict[str, Any]](
+            max_buffer_size=100
+        )
+
+        async def forward_telegram_messages() -> None:
+            """Forward Telegram messages to the unified queue."""
+            async for msg in poller(cfg):
+                await send_stream.send(msg)
+
         async with anyio.create_task_group() as tg:
+            # Start Telegram poller
+            tg.start_soon(forward_telegram_messages)
+
+            # Start socket listener if enabled
+            if enable_socket:
+                tg.start_soon(socket_listener, cfg, send_stream.clone())
 
             async def run_job(
                 chat_id: int,
@@ -863,7 +930,7 @@ async def run_main_loop(
 
             scheduler = ThreadScheduler(task_group=tg, run_job=run_thread_job)
 
-            async for msg in poller(cfg):
+            async for msg in recv_stream:
                 text = msg["text"]
                 user_msg_id = msg["message_id"]
 
