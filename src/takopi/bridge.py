@@ -39,6 +39,16 @@ def _log_runner_event(evt: TakopiEvent) -> None:
             logger.info("[runner] error: %s", evt.error or "error")
 
 
+# Quick reaction emojis that can be sent directly as replies
+QUICK_REACTION_EMOJIS = frozenset({"👍", "👎", "✅", "❌", "🙏", "👀"})
+
+
+def _is_quick_reaction(text: str) -> bool:
+    """Check if text is a single emoji that should be sent directly as a reply."""
+    stripped = text.strip()
+    return stripped in QUICK_REACTION_EMOJIS
+
+
 def _is_cancel_command(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
@@ -714,7 +724,7 @@ async def poll_updates(cfg: BridgeConfig) -> AsyncIterator[dict[str, Any]]:
 
     while True:
         updates = await cfg.bot.get_updates(
-            offset=offset, timeout_s=50, allowed_updates=["message"]
+            offset=offset, timeout_s=50, allowed_updates=["message", "message_reaction"]
         )
         if updates is None:
             logger.info("[loop] getUpdates failed")
@@ -724,7 +734,29 @@ async def poll_updates(cfg: BridgeConfig) -> AsyncIterator[dict[str, Any]]:
 
         for upd in updates:
             offset = upd["update_id"] + 1
-            msg = upd["message"]
+
+            # Handle message_reaction updates (e.g., thumbs up on a message)
+            if "message_reaction" in upd:
+                reaction = upd["message_reaction"]
+                if reaction["chat"]["id"] != cfg.chat_id:
+                    continue
+                # Extract new emoji reactions
+                new_reactions = reaction.get("new_reaction", [])
+                for r in new_reactions:
+                    if r.get("type") == "emoji" and r.get("emoji") in QUICK_REACTION_EMOJIS:
+                        # Synthesize a message that looks like a reply to the reacted message
+                        yield {
+                            "text": r["emoji"],
+                            "message_id": int(time.time() * 1000),  # synthetic ID
+                            "chat": {"id": reaction["chat"]["id"]},
+                            "reply_to_message": {"message_id": reaction["message_id"]},
+                        }
+                continue
+
+            # Handle regular message updates
+            msg = upd.get("message")
+            if msg is None:
+                continue
             if "text" not in msg:
                 continue
             if msg["chat"]["id"] != cfg.chat_id:
