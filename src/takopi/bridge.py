@@ -447,7 +447,7 @@ async def send_result_message(
     edit_message_id: int | None,
     prepared: tuple[str, list[dict[str, Any]]] | None = None,
     delete_tag: str = "final",
-) -> None:
+) -> int | None:
     final_msg, edited = await _send_or_edit_markdown(
         cfg.bot,
         chat_id=chat_id,
@@ -458,10 +458,11 @@ async def send_result_message(
         prepared=prepared,
     )
     if final_msg is None:
-        return
+        return None
     if progress_id is not None and (edit_message_id is None or not edited):
         logger.debug("[%s] delete progress message_id=%s", delete_tag, progress_id)
         await cfg.bot.delete_message(chat_id=chat_id, message_id=progress_id)
+    return int(final_msg["message_id"])
 
 
 async def handle_message(
@@ -474,6 +475,7 @@ async def handle_message(
     resume_token: ResumeToken | None,
     strip_resume_line: Callable[[str], bool] | None = None,
     running_tasks: dict[int, RunningTask] | None = None,
+    resume_cache: dict[int, ResumeToken] | None = None,
     on_thread_known: Callable[[ResumeToken, anyio.Event], Awaitable[None]]
     | None = None,
     clock: Callable[[], float] = time.monotonic,
@@ -630,7 +632,8 @@ async def handle_message(
     status = (
         "error" if run_ok is False else ("done" if final_answer.strip() else "error")
     )
-    sync_resume_token(progress_renderer, completed.resume or outcome.resume)
+    final_resume = completed.resume or outcome.resume
+    sync_resume_token(progress_renderer, final_resume)
     final_parts = progress_renderer.render_final_parts(
         elapsed, final_answer, status=status
     )
@@ -658,7 +661,7 @@ async def handle_message(
             final_entities,
         )
 
-    await send_result_message(
+    final_msg_id = await send_result_message(
         cfg,
         chat_id=chat_id,
         user_msg_id=user_msg_id,
@@ -669,6 +672,11 @@ async def handle_message(
         prepared=(final_rendered, final_entities),
         delete_tag="final",
     )
+
+    # Cache the resume token for this message so reactions can look it up
+    if resume_cache is not None and final_msg_id is not None and final_resume is not None:
+        resume_cache[final_msg_id] = final_resume
+        logger.debug("[cache] stored resume for message_id=%s", final_msg_id)
 
 
 SOCKET_PATH = Path.home() / ".takopi" / "takopi.sock"
@@ -879,6 +887,8 @@ async def run_main_loop(
     enable_socket: bool = True,
 ) -> None:
     running_tasks: dict[int, RunningTask] = {}
+    # Cache mapping message IDs to resume tokens for reaction handling
+    resume_cache: dict[int, ResumeToken] = {}
 
     try:
         await _set_command_menu(cfg)
@@ -946,6 +956,7 @@ async def run_main_loop(
                         resume_token=resume_token,
                         strip_resume_line=cfg.router.is_resume_line,
                         running_tasks=running_tasks,
+                        resume_cache=resume_cache,
                         on_thread_known=on_thread_known,
                         progress_edit_every=cfg.progress_edit_every,
                     )
@@ -977,6 +988,9 @@ async def run_main_loop(
                 r = msg.get("reply_to_message") or {}
                 resume_token = cfg.router.resolve_resume(text, r.get("text"))
                 reply_id = r.get("message_id")
+                # Check cache for reactions (where reply text isn't available)
+                if resume_token is None and reply_id is not None:
+                    resume_token = resume_cache.get(int(reply_id))
                 if resume_token is None and reply_id is not None:
                     running_task = running_tasks.get(int(reply_id))
                     if running_task is not None:
