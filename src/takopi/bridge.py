@@ -290,6 +290,7 @@ class BridgeConfig:
     final_notify: bool
     startup_msg: str
     progress_edit_every: float = PROGRESS_EDIT_EVERY_S
+    show_resume_line: bool = True
 
 
 @dataclass
@@ -495,7 +496,10 @@ async def handle_message(
     runner_text = _strip_resume_lines(text, is_resume_line=resume_strip)
 
     progress_renderer = ExecProgressRenderer(
-        max_actions=5, resume_formatter=runner.format_resume, engine=runner.engine
+        max_actions=5,
+        resume_formatter=runner.format_resume,
+        engine=runner.engine,
+        show_resume_line=cfg.show_resume_line,
     )
 
     progress_state = await send_initial_progress(
@@ -864,7 +868,10 @@ async def _send_runner_unavailable(
     reason: str,
 ) -> None:
     progress_renderer = ExecProgressRenderer(
-        max_actions=0, resume_formatter=runner.format_resume, engine=runner.engine
+        max_actions=0,
+        resume_formatter=runner.format_resume,
+        engine=runner.engine,
+        show_resume_line=cfg.show_resume_line,
     )
     if resume_token is not None:
         progress_renderer.resume_token = resume_token

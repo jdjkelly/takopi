@@ -214,12 +214,18 @@ def _parse_bridge_config(
 
     bot = TelegramClient(token)
 
+    # Parse optional show_resume_line config (defaults to True)
+    show_resume_line = config.get("show_resume_line", True)
+    if not isinstance(show_resume_line, bool):
+        show_resume_line = True
+
     return BridgeConfig(
         bot=bot,
         router=router,
         chat_id=chat_id,
         final_notify=final_notify,
         startup_msg=startup_msg,
+        show_resume_line=show_resume_line,
     )
 
 

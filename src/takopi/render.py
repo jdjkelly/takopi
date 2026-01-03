@@ -220,6 +220,7 @@ class ExecProgressRenderer:
         max_actions: int = 5,
         command_width: int | None = MAX_PROGRESS_CMD_LEN,
         resume_formatter: Callable[[ResumeToken], str] | None = None,
+        show_resume_line: bool = True,
     ) -> None:
         self.max_actions = max(0, int(max_actions))
         self.command_width = command_width
@@ -228,6 +229,7 @@ class ExecProgressRenderer:
         self.seen_action_ids: set[str] = set()
         self.resume_token: ResumeToken | None = None
         self._resume_formatter = resume_formatter
+        self._show_resume_line = show_resume_line
         self.engine = engine
 
     def note_event(self, event: TakopiEvent) -> bool:
@@ -305,6 +307,8 @@ class ExecProgressRenderer:
         return MarkdownParts(header=header, body=body, footer=self.render_footer())
 
     def render_footer(self) -> str | None:
+        if not self._show_resume_line:
+            return None
         if not self.resume_token or self._resume_formatter is None:
             return None
         return self._resume_formatter(self.resume_token)
