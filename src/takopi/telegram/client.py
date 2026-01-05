@@ -162,6 +162,10 @@ class BotClient(Protocol):
 
     async def get_me(self) -> dict | None: ...
 
+    async def get_file(self, file_id: str) -> dict | None: ...
+
+    async def download_file(self, file_path: str) -> bytes | None: ...
+
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
@@ -723,3 +727,27 @@ class TelegramClient:
             priority=SEND_PRIORITY,
             chat_id=None,
         )
+
+    async def get_file(self, file_id: str) -> dict | None:
+        res = await self._post("getFile", {"file_id": file_id})
+        return res if isinstance(res, dict) else None
+
+    async def download_file(self, file_path: str) -> bytes | None:
+        if self._client_override is not None:
+            return await self._client_override.download_file(file_path)
+        if self._http_client is None or self._base is None:
+            raise RuntimeError("TelegramClient is configured without an HTTP client.")
+        url = f"{self._base.replace('/bot', '/file/bot')}/{file_path}"
+        logger.debug("telegram.download_file", url=url)
+        try:
+            resp = await self._http_client.get(url)
+            resp.raise_for_status()
+            return resp.content
+        except httpx.HTTPError as e:
+            logger.error(
+                "telegram.download_file.error",
+                url=url,
+                error=str(e),
+                error_type=e.__class__.__name__,
+            )
+            return None
